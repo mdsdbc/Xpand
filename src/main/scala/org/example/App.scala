@@ -2,9 +2,7 @@ package org.example
 
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types._
 import org.apache.hadoop.fs._
-
 
 object App {
 
@@ -40,35 +38,6 @@ object App {
     }
     df
   }
-  /*def read_csv_2(sc : SparkSession , path : String ): DataFrame ={
-    val source = rel_path + path
-    val customSchema = StructType(Array(
-      StructField("App", StringType, false),
-      StructField("Category", StringType, true),
-      StructField("Rating", DoubleType, true),
-      StructField("Reviews", LongType, true),
-      StructField("Size", StringType, true),
-      StructField("Installs", StringType, true),
-      StructField("Type", StringType, true),
-      StructField("Price", StringType, true),
-      StructField("Content Rating", StringType, true),
-      StructField("Genres", StringType, true),
-      StructField("Last Updated", StringType, true),
-      StructField("Current Ver", StringType, true),
-      StructField("Android Ver", StringType, true),
-      StructField("bytes_served", StringType, true))
-    )
-    val df = sc
-      .read
-      .option("escape","\"")
-      .option("header","true")
-      .schema(customSchema)
-      .csv(source)
-    if(debug){
-      print_state(df,"read csv file:"+path)
-    }
-    df
-  }*/
 
   /**
    * I assumed nan values count as 0 for the average.
@@ -124,19 +93,15 @@ object App {
   }
 
   def part3( df : DataFrame): Unit = {
-    /*val df_1 = df
-       //.withColumn("Categories",collect_list("Category"))
-      .withColumn("Price",col("Price")*0.9)
-      .groupBy("App")
-      .agg(collect_list("Category").as("Categories"),avg("Rating").as("Rating"))*/
 
-    val genres: String => String = _.replace(",",";")
+    val toDbl = udf[Double, String]( _.toDouble)
+    val toLng = udf[Long, String]( _.toLong)
+
+    val genres: String => Array[String] = _.split(";")
 
     def size(size: String) : Double = {
       size match {
-        case size if size.contains("M") => size.split("M")(0).toDouble*1024*1024
-        case size if size.contains("K") => size.split("K")(0).toDouble*1024
-        case size if size.contains("B") => size.split("B")(0).toDouble
+        case size if size.contains("M") => size.split("M")(0).toDouble
         case _ => Double.NaN
       }
     }
@@ -144,24 +109,34 @@ object App {
     val genresUDF = udf(genres)
     val sizeUDF = udf(size _)
 
-    /*
-    val sizeUDF = udf((size: String ) => ( size) match {
-      case size if size.contains("M") => size.split("M")(0).toInt*1024*1024
-      case size if size.contains("K") => size.split("M")(0).toInt*1024
-      case _ => null
-    })
-*/
-
-
-    var df_1 = df.withColumn("Price",col("Price")*0.9)
-    df_1 = df_1.withColumn("Genres", genresUDF(col("Genres")))
+    var df_1 = df.withColumn("Rating", toDbl(col("Rating")))
+    df_1 = df_1.withColumn("Reviews", toLng(col("Reviews")))
     df_1 = df_1.withColumn("Size", sizeUDF(col("Size")))
+    df_1 = df_1.withColumn("Price",col("Price")*0.9)
+    df_1 = df_1.withColumn("Genres", genresUDF(col("Genres")))
+    //df_1 = df_1.withColumn("Last Updated", to_date(col("Last Updated"),"MONTH dd, yyyy")) // TODO: requires a hand made parser udf with split and switch case for month
 
-    df_1 = df_1
+    df_1 = df_1.withColumnRenamed("Content Rating", "Content_Rating")
+      .withColumnRenamed("Last Updated", "Last_Updated")
+      .withColumnRenamed("Current Ver", "Current_Version")
+      .withColumnRenamed("Android Ver", "Minimum_Android_Version")
+
+    val df_2 = df_1
       .groupBy("App")
       .agg(collect_list("Category").as("Categories"))
 
-    df_1.show(300)
+    //TODO:dups in columns should have the same values as the ones on the row with the maximum number of reviews
+    /*
+    SELECT a.app, a.rev, a.*
+    FROM df_1 as a
+    INNER JOIN (
+        SELECT app, MAX(rev) rev
+        FROM df_1
+        GROUP BY app
+     ) as b ON a.app = b.app AND a.rev = b.rev
+     */
+
+    df_1.show(500)
     df_1.printSchema()
 
   }
