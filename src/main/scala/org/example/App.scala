@@ -116,7 +116,8 @@ object App {
     df_1 = df_1.withColumn("Size", sizeUDF(col("Size")))
     df_1 = df_1.withColumn("Price",col("Price")*0.9)
     df_1 = df_1.withColumn("Genres", genresUDF(col("Genres")))
-    //df_1 = df_1.withColumn("Last Updated", to_date(col("Last Updated"),"MONTH dd, yyyy")) // TODO: seems to require a hand made parser udf with split and switch case for month
+    // TODO: seems to require a hand made parser with split and switch case for month
+    //df_1 = df_1.withColumn("Last Updated", to_date(col("Last Updated"),"MONTH dd, yyyy"))
 
     df_1 = df_1.withColumnRenamed("Content Rating", "Content_Rating")
       .withColumnRenamed("Last Updated", "Last_Updated")
@@ -127,15 +128,6 @@ object App {
       .groupBy("App")
       .agg(collect_set("Category").as("Categories"))
 
-    /*
-    SELECT a.app, a.rev, a.*
-    FROM df_1 as a
-    INNER JOIN (
-        SELECT app, MAX(rev) rev
-        FROM df_1
-        GROUP BY app
-     ) as b ON a.app = b.app AND a.rev = b.rev
-     */
     /*
     line 10474 - file:googleplaystore.csv - line with bad format, missing field "Category". I added a "," to correct it
     and generate a (null) field since I don't know which category it should be
