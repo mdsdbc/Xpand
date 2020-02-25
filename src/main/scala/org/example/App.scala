@@ -138,7 +138,7 @@ object App {
      */
     /*
     line 10474 - file:googleplaystore.csv - line with bad format, missing field "Category". I added a "," to correct it
-    and generate a (null) field since it don't know what category it should be
+    and generate a (null) field since I don't know which category it should be
     */
     var df_3 = df_1
         .groupBy("App")
