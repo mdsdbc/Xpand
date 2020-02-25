@@ -6,7 +6,7 @@ import org.apache.hadoop.fs._
 
 object App {
 
-  val debug = false
+  val debug = true
   val rel_path = "src/main/resources/"
 
   /**
@@ -17,7 +17,7 @@ object App {
   def print_state (df : DataFrame,msg: String = "" ): Unit ={
     println(msg)
     df.printSchema()
-    df.show(300)
+    df.show(500)
   }
 
   /**
@@ -52,7 +52,7 @@ object App {
       avg("Sentiment_Polarity").as("Average_Sentiment_Polarity")
     )
 
-    if(!debug){
+    if(debug){
       print_state(df_1,"Part1 - result")
     }
     df_1
@@ -77,7 +77,7 @@ object App {
       .filter("Rating >= 4.0")
       .orderBy(desc("Rating"))
 
-    if(!debug){
+    if(debug){
       print_state(df_1,"Part2 - result")
     }
 
@@ -92,7 +92,7 @@ object App {
     fs.rename(new Path(rel_path + csv_output_folder +"/" + file), new Path(rel_path + csv_output_folder +"/"+csv_output_file_name))
   }
 
-  def part3( df : DataFrame): Unit = {
+  def part3( df : DataFrame): DataFrame = {
 
     val toDbl = udf[Double, String]( _.toDouble)
     val toLng = udf[Long, String]( _.toLong)
@@ -102,6 +102,8 @@ object App {
     def size(size: String) : Double = {
       size match {
         case size if size.contains("M") => size.split("M")(0).toDouble
+        case size if size.contains("k") => size.split("k")(0).toDouble/1024
+        case size if size.contains("B") => size.split("B")(0).toDouble/1024*1024
         case _ => Double.NaN
       }
     }
@@ -114,7 +116,7 @@ object App {
     df_1 = df_1.withColumn("Size", sizeUDF(col("Size")))
     df_1 = df_1.withColumn("Price",col("Price")*0.9)
     df_1 = df_1.withColumn("Genres", genresUDF(col("Genres")))
-    //df_1 = df_1.withColumn("Last Updated", to_date(col("Last Updated"),"MONTH dd, yyyy")) // TODO: requires a hand made parser udf with split and switch case for month
+    //df_1 = df_1.withColumn("Last Updated", to_date(col("Last Updated"),"MONTH dd, yyyy")) // TODO: seems to require a hand made parser udf with split and switch case for month
 
     df_1 = df_1.withColumnRenamed("Content Rating", "Content_Rating")
       .withColumnRenamed("Last Updated", "Last_Updated")
@@ -123,9 +125,8 @@ object App {
 
     val df_2 = df_1
       .groupBy("App")
-      .agg(collect_list("Category").as("Categories"))
+      .agg(collect_set("Category").as("Categories"))
 
-    //TODO:dups in columns should have the same values as the ones on the row with the maximum number of reviews
     /*
     SELECT a.app, a.rev, a.*
     FROM df_1 as a
@@ -135,10 +136,82 @@ object App {
         GROUP BY app
      ) as b ON a.app = b.app AND a.rev = b.rev
      */
+    /*
+    line 10474 - file:googleplaystore.csv - line with bad format, missing field "Category". I added a "," to correct it
+    and generate a (null) field since it don't know what category it should be
+    */
+    var df_3 = df_1
+        .groupBy("App")
+        .agg(
+          max("Reviews").as("Reviews")
+        )
 
-    df_1.show(500)
-    df_1.printSchema()
+    df_3 = df_1.join(
+      df_3,
+      Seq("App","Reviews"),
+      "inner"
+    )
 
+    df_3 = df_2.join(
+      df_3,
+      Seq("App"),
+      "inner"
+    )
+
+    if(debug){
+      print_state(df_3,"Part3 - result")
+    }
+    df_3
+  }
+
+  def part4(fs : FileSystem , df_1 : DataFrame,df_3 : DataFrame, csv_output_folder : String, csv_output_file_name : String): DataFrame= {
+    val df_4 = df_1.join(
+      df_3,
+      Seq("App"),
+      "inner"
+    )
+
+    if(debug){
+      print_state(df_4,"Part4 - result")
+    }
+
+    df_4
+      .coalesce(1)
+      .write
+      .option("header","true")
+      .parquet(rel_path + csv_output_folder)
+
+    val file = fs.globStatus(new Path(rel_path + csv_output_folder + "/part-0000*.parquet"))(0).getPath().getName()
+    fs.rename(new Path(rel_path + csv_output_folder +"/" + file), new Path(rel_path + csv_output_folder +"/"+csv_output_file_name))
+    df_4
+  }
+
+  def part5(fs : FileSystem ,df_4 : DataFrame, csv_output_folder : String, csv_output_file_name : String): DataFrame= {
+    val df_5 = df_4
+      .groupBy("Genres")
+      .agg(
+        count("Genres").as("Count"),
+        avg("Rating").as("Average_Rating"),
+        avg("Average_Sentiment_Polarity").as("Average_Sentiment_Polarity")
+      )
+
+    if(debug){
+      print_state(df_5,"Part5 - result")
+    }
+
+    df_5
+      .coalesce(1)
+      .write
+      .option("header","true")
+      .parquet(rel_path + csv_output_folder)
+
+    val file = fs.globStatus(new Path(rel_path + csv_output_folder + "/part-0000*.parquet"))(0).getPath().getName()
+    fs.rename(new Path(rel_path + csv_output_folder +"/" + file), new Path(rel_path + csv_output_folder +"/"+csv_output_file_name))
+
+    if(debug){
+      print_state(df_5,"Part4 - result")
+    }
+    df_5
   }
 
   def main (arg: Array[String]): Unit = {
@@ -147,6 +220,7 @@ object App {
     val spark = SparkSession
       .builder()
       .config("spark.master", "local")
+      .config("spark.sql.parquet.compression.codec", "gzip")
       .getOrCreate()
 
     val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
@@ -154,16 +228,36 @@ object App {
     //part1
     val source_df_1 = read_csv(spark,cvs_files(0))
     val df_1 = part1(source_df_1)
+
     //part2
-    val csv_output_folder = "part2"
-    val csv_output_file_name = "best_apps.csv"
+    var csv_output_folder = "part2"
+    var csv_output_file_name = "best_apps.csv"
     val csv_delimiter = "§"
 
-    fs.delete(new Path(rel_path + csv_output_folder), true)
+    fs.delete(new Path(rel_path + csv_output_folder), true) //clean up
+
     val source_df_2 = read_csv(spark,cvs_files(1))
     part2(fs,source_df_2,csv_output_folder,csv_output_file_name,csv_delimiter)
+
     //part3
-    part3(source_df_2)
+    val df_3 =  part3(source_df_2)
+
+    //part4
+    csv_output_folder = "part4"
+    csv_output_file_name = "googleplaystore_cleaned"
+
+    fs.delete(new Path(rel_path + csv_output_folder), true) //clean up
+
+    val df_4 = part4(fs,df_1,df_3,csv_output_folder,csv_output_file_name)
+
+    //part5
+    csv_output_folder = "part5"
+    csv_output_file_name = "googleplaystore_metrics"
+
+    fs.delete(new Path(rel_path + csv_output_folder), true) //clean up
+
+    part5(fs,df_4,csv_output_folder,csv_output_file_name)
+
     spark.stop()
   }
 }
